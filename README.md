@@ -1,282 +1,193 @@
-# Guacamole 1.6.0 on Ubuntu 24.04 (Jakarta / Tomcat 10.1.44) — **README**
+# Guacamole 1.6.0 — Fresh Install on Ubuntu 24.04 (RDP-enabled)
 
-> **TL;DR**  
-> Run on a clean Ubuntu 24.04 host:  
-> ```bash
-> chmod +x guac.sh
-> sudo ./guac.sh
-> ```  
-> Answer 5 prompts → script **removes old installs**, **drops & recreates** `guacamole_db`, builds **guacd 1.6.0**, installs **Tomcat 10.1.44**, migrates Guacamole 1.6.0 to **Jakarta**, deploys **JDBC/TOTP/QuickConnect/Encrypted-JSON/Recording Player**, and performs health checks.  
-> **Risk**: Tomcat 10 for Guacamole 1.6.0 is an advanced (unsupported) path using Jakarta migration. Keep a Tomcat 9 fallback handy.
+Single bash script to **remove old installs** and deploy a **clean** Apache Guacamole 1.6.0 stack:
 
----
+- **guacd** compiled from source (with **RDP** via `freerdp3-dev`, plus **SSH/VNC`**)
+- **Tomcat 10.1.44** (manual install) + **OpenJDK 21**
+- **MariaDB** backend (JDBC auth via **MySQL Connector/J** 8.4.x)
+- Extensions: **TOTP 2FA**, **QuickConnect**, **Session Recording**
+- **Jakarta** migration for Tomcat 10 (WAR + extensions)
+- Optional **Nginx + Let's Encrypt** reverse proxy
 
-## 0) What this installer does
-
-- **Destructive clean** of previous Guacamole/Tomcat (backs up to `/root/guac-backup-<timestamp>`).
-- **Fixes `/tmp`** & stabilizes APT, then installs build deps + **OpenJDK 21 + MariaDB**.
-- Builds **guacd 1.6.0** (from source) and sets up a hardened systemd service.
-- Installs **Tomcat 10.1.44** (manual) with systemd & `GUACAMOLE_HOME=/etc/guacamole`.
-- Downloads **Guacamole 1.6.0 WAR + extensions**, migrates WAR/JARs from `javax.*` → `jakarta.*`.
-- Deploys **JDBC (MariaDB)**, **TOTP**, **QuickConnect**, **Encrypted JSON**, **History Recording Player**.
-- Creates **MariaDB**: `guacamole_db`, user `guacamole_user` / pass `123Beta`, **(drops existing DB)**, loads schema.
-- Creates **recording** path, writes `guacamole.properties`, restarts Tomcat, and runs **health checks**.
-- Optional **Nginx + Let’s Encrypt** reverse proxy (if selected in Q2).
+> ⚠️ **Destructive**: can drop/replace existing Guacamole/Tomcat/DB depending on your answers. The script backs up any prior install into `/root/guac-backup-YYYY-MM-DD_HHMMSS`.
 
 ---
 
-## 1) Prerequisites
-
-- **Ubuntu 24.04 LTS** (fresh or with no conflicting Tomcat/Guacamole).
-- Root (or `sudo`) access.
-- Outbound internet to download Apache artifacts & packages.
-- If choosing **Nginx mode**: a public **DNS A record** pointing to this host, port **80** reachable.
-
----
-
-## 2) Running the installer
+## TL;DR
 
 ```bash
-chmod +x guac.sh
-sudo ./guac.sh
-```
+# 1) Copy the script to server as: guac_fresh_install.sh
+sudo bash guac_fresh_install.sh
 
-You’ll be asked **5 questions**:
+# 2) Answer the 20 pre-flight questions (summary shown; press ENTER to confirm).
 
-1. **Destructive confirmation** — type `YES` to continue.
-2. **Mode** — `direct` (Tomcat on :8080) **or** `nginx,example.com,admin@example.com`.
-3. **JSON secret** — `auto` or paste a **32-hex** key (used by Encrypted JSON auth).
-4. **QuickConnect protocols** — default `rdp,ssh,vnc`.
-5. **Recording path** — default `/var/lib/guacamole/recordings`.
-
-> **Note:** The script **drops & recreates** `guacamole_db`. A backup is stored under `/root/guac-backup-*/db_guacamole_db_*.sql.gz` before dropping.
-
----
-
-## 3) After install — first login
-
-- **URL (direct mode):** `http://<server-ip>:8080/guacamole/`  
-  **URL (nginx mode):** `http(s)://<your-domain>/`
-- Default credentials (created by JDBC schema):  
-  **user:** `guacadmin` — **pass:** `guacadmin`
-- Immediately:
-  1. Login and **change** `guacadmin` password.
-  2. Create a real admin, **disable** `guacadmin`.
-
----
-
-## 4) What gets installed & where
-
-**Services**
-- `guacd` — systemd (`/etc/systemd/system/guacd.service`)
-- `tomcat` — systemd (`/etc/systemd/system/tomcat.service`)
-
-**Paths**
-- Tomcat home: `/opt/tomcat`
-- Guacamole home (`GUACAMOLE_HOME`): `/etc/guacamole`
-  - Extensions: `/etc/guacamole/extensions`
-  - JDBC driver: `/etc/guacamole/lib`
-  - Config: `/etc/guacamole/guacamole.properties`
-- Session recordings: `/var/lib/guacamole/recordings` (configurable)
-
-**Logs**
-- Tomcat: `/opt/tomcat/logs/catalina.out` (and related)
-- guacd: `journalctl -u guacd` (systemd)
-
----
-
-## 5) Health checks & common commands
-
-```bash
-# service status
-sudo systemctl --no-pager status guacd tomcat
-
-# listening ports (should show 4822 and 8080 in direct mode)
-ss -lntp | grep -E ':4822|:8080'
-
-# HTTP check (direct mode)
-curl -I http://127.0.0.1:8080/guacamole/ | head -n1  # 200/302/401 are OK
-
-# versions
-guacd -v   # should show 1.6.0
+# 3) Open Guacamole
+# - direct mode:  http://<server-ip>:<Q3_PORT><Q4_CTX>/
+# - nginx mode:   https://<domain><Q4_CTX>/
+# Login: guacadmin / guacadmin (rotate & disable immediately)
 ```
 
 ---
 
-## 6) Security checklist (minimum)
+## What this script installs
 
-- **Rotate** DB password (`123Beta`) and `json-secret-key` after testing. Store in a secret manager.
-- If using **Nginx**, enable `use-remote-address: true` (the script does this automatically for Nginx mode).
-- Consider removing Tomcat default apps:
-  ```bash
-  sudo rm -rf /opt/tomcat/webapps/{docs,examples,host-manager,manager,ROOT}
-  sudo systemctl restart tomcat
-  ```
-- Firewall: allow **80/443** (Nginx) or only trusted **8080** (direct). Example (UFW):
-  ```bash
-  sudo ufw allow 8080/tcp    # direct mode only
-  sudo ufw allow 80,443/tcp  # nginx mode
-  sudo ufw enable
-  ```
+- **Apache Tomcat**: 10.1.44 at `/opt/tomcat` (systemd unit: `tomcat.service`).
+- **guacd (server)**: built from `guacamole-server-1.6.0` with **RDP (FreeRDP 3)**, SSH, VNC, audio/video libs where available (systemd: `guacd.service`). Binds to your chosen address (default `127.0.0.1:4822`).
+- **Guacamole client**: `guacamole-1.6.0` **WAR**, Jakarta-migrated, deployed to Tomcat as `<context>.war` (default path `/guacamole`).
+- **MariaDB**: DB, user, and schema for JDBC auth (creates default `guacadmin`).
+- **Extensions**: TOTP 2FA, QuickConnect, History Recording (all migrated to Jakarta).
+- **JDBC driver**: **MySQL Connector/J** `8.4.x` in `/etc/guacamole/lib/` (fixes “No suitable driver…”).
+
+**Why MySQL Connector/J?** MariaDB Connector/J 3.x may not claim `jdbc:mysql://` URLs. Using MySQL’s driver is the most reliable choice for Guacamole 1.6.0 on Tomcat 10.
 
 ---
 
-## 7) Feature notes
+## What it removes (with backup)
 
-### 7.1 TOTP (2FA)
-- TOTP extension is installed.  
-- Users enroll TOTP at first login if enforced.  
-- Optional props exist (issuer, host rules) — see `guacamole.properties` comments.
+- Stops & removes prior **Tomcat** (`/opt/tomcat` + unit), **guacd** (`/usr/local/sbin/guacd` + libs), and **/etc/guacamole**.
+- Saves copies to `/root/guac-backup-YYYY-MM-DD_HHMMSS` before removal.
+- Optionally **drops and recreates** the DB if you answer `Q15 = y`.
 
-### 7.2 Session Recording
-- Recording **playback** is enabled by the **History Recording Storage** extension.  
-- In each **connection** (SSH/RDP/etc.), set:
-  - `recording-path` = `/var/lib/guacamole/recordings`  
-  - (optional) `recording-name` = `${USERNAME}-${CONNECTION_NAME}-${START_TIME}`
-- Recordings become viewable from **History → View**.
+---
 
-### 7.3 QuickConnect (ad-hoc)
-- QuickConnect bar accepts URIs like:  
-  `ssh://10.10.10.10:22/?username=ubuntu`  
-- Allowed protocols configured by `quickconnect-allowed-protocols` (default: `rdp,ssh,vnc`).
-- **Recommendation:** Avoid passwords in URIs; use vaulted creds.
+## The 20 pre-flight questions
 
-### 7.4 Encrypted JSON authentication
-- The script sets `json-secret-key` (prompt 3).
-- A service can POST an **encrypted+signed** token to `/api/tokens` to log users into specific connections.  
-- Minimal test (replace `SECRET_HEX` with your `json-secret-key`):
+| #  | Prompt (default)                                                                                | Notes |
+|----|--------------------------------------------------------------------------------------------------|-------|
+| Q1 | This will REMOVE old installs. Type **YES** to proceed                                          | Safety gate |
+| Q2 | Deployment mode: `direct` or `nginx,<domain>,<email>` (direct)                                  | Nginx enables HTTPS + optional HSTS |
+| Q3 | Tomcat HTTP port (8080)                                                                         | Applies to Tomcat connector |
+| Q4 | Web context path (/guacamole)                                                                   | WAR name follows this |
+| Q5 | MariaDB database name (guacamole_db)                                                            |  |
+| Q6 | MariaDB username (guacamole_user)                                                               |  |
+| Q7 | MariaDB password (auto-generate if empty)                                                       | Stored in `guacamole.properties` |
+| Q8 | MariaDB root auth method: `socket` / `password` (socket)                                        | If `password`, you’ll be asked for root password |
+| Q9 | Enable TOTP 2FA? (Y)                                                                            | Installs TOTP extension |
+| Q10| QuickConnect allowed protocols (rdp,ssh,vnc)                                                     | RDP supported via FreeRDP 3 |
+| Q11| Session recording path (/var/lib/guacamole/recordings)                                          | Created & chowned to `tomcat` |
+| Q12| Timezone (auto-detected, e.g., Africa/Cairo)                                                     | Applies to OS time |
+| Q13| Tomcat heap (Xms Xmx) (512m 1g)                                                                 | e.g., `1024m 2048m` |
+| Q14| If DB exists, DROP and recreate? (N)                                                            | Destructive; always backed up first |
+| Q15| Create an additional admin user now? (N)                                                        | If Y, Q16 & Q17 appear |
+| Q16| Extra admin username (admin)                                                                    | Only asked if Q15=Y |
+| Q17| Extra admin password (auto-generate if empty)                                                   | Only asked if Q15=Y |
+| Q18| `guacd` bind address (127.0.0.1)                                                                | Use `0.0.0.0` to expose on network |
+| Q19| QuickConnect: deny plaintext `password` parameter? (Y)                                          | Security hardening |
+| Q20| (nginx mode only) Enable HSTS on Nginx? (Y)                                                     | Adds `Strict-Transport-Security` |
+
+A summary of your answers is shown before the install begins.
+
+---
+
+## File/Service layout
+
+- **Tomcat**: `/opt/tomcat`, unit: `tomcat.service`  
+- **Guacamole HOME**: `/etc/guacamole`  
+  - `guacamole.properties`
+  - `extensions/*.jar` (Jakarta-migrated TOTP/QuickConnect/History/JDBC MySQL)
+  - `lib/mysql-connector-j-8.4.x.jar`
+- **guacd**: `/usr/local/sbin/guacd`, unit: `guacd.service` (binds to your selection, default `127.0.0.1:4822`)  
+- **Recordings**: `Q11` (default `/var/lib/guacamole/recordings`)  
+- **Backups**: `/root/guac-backup-...`
+
+---
+
+## Running the installer
 
 ```bash
-SECRET_HEX="<32-hex-from-guacamole.properties>"
-cat >/tmp/payload.json <<'JSON'
-{
-  "username":"adhoc",
-  "expires":"2030-01-01T00:00:00Z",
-  "connections":[{"name":"My SSH","protocol":"ssh","parameters":{"hostname":"10.10.10.10","port":"22","username":"ubuntu"}}]
-}
-JSON
-
-HMAC=$(openssl dgst -sha256 -mac HMAC -macopt hexkey:${SECRET_HEX} -binary /tmp/payload.json | base64 -w0)
-openssl enc -aes-128-cbc -K ${SECRET_HEX} -iv 00000000000000000000000000000000 -nosalt -a \
-  -in <(printf "%s" "$(echo -n "$HMAC" | base64 -d)"; cat /tmp/payload.json) \
-  -out /tmp/token.b64
-
-curl --data-urlencode "data=$(cat /tmp/token.b64)" http://127.0.0.1:8080/guacamole/api/tokens
+chmod +x guac_fresh_install.sh
+sudo bash guac_fresh_install.sh
 ```
 
----
-
-## 8) Database management
-
-**Credentials (default)**  
-- DB: `guacamole_db`  
-- User: `guacamole_user`  
-- Pass: `123Beta`
-
-**Backup**  
-```bash
-sudo mariadb-dump guacamole_db | gzip -9 > ~/guacamole_db_$(date +%F_%H%M).sql.gz
-```
-
-**Restore**  
-```bash
-gunzip -c ~/guacamole_db_YYYY-MM-DD_HHMM.sql.gz | sudo mariadb guacamole_db
-```
-
-> The installer auto-backs up and **drops** `guacamole_db` on every run to ensure a **fresh** install.
+- Press **ENTER** to confirm the summary.
+- The script runs idempotently where possible. If you re-run, previous backups remain.
 
 ---
 
-## 9) Troubleshooting
+## After installation
 
-**A. APT errors: “Couldn’t create temporary file /tmp/…”**  
-The script now **heals `/tmp`** (ensures `chmod 1777` and remounts RW) and retries APT, temporarily disabling noisy PPAs/ESM if needed.
-
-**B. Tomcat starts but `/guacamole/` 404/500**  
-- Check WAR deployed: `/opt/tomcat/webapps/guacamole.war` (~7–8 MB).  
-- Check logs: `sudo tail -n 200 /opt/tomcat/logs/catalina.out`.
-
-**C. “Protocol violation” or weird runtime**  
-- Confirm **guacd** and **client** both **1.6.0**.  
-- This Jakarta path is advanced; if instability persists, consider **Tomcat 9** (supported path below).
-
-**D. DB auth fails**  
-- Verify `/etc/guacamole/guacamole.properties` `mysql-*` values.  
-- Ensure JDBC driver exists: `/etc/guacamole/lib/mariadb-java-client-*.jar`.
-
-**E. Recordings missing**  
-- Ensure connection has `recording-path` set and Tomcat can read the directory (group `tomcat` + `2750` permissions).  
-- Playback requires **history recording storage** extension JAR in `/etc/guacamole/extensions`.
+1. Visit the portal:
+   - **direct**: `http://<server-ip>:<Q3_PORT><Q4_CTX>/`
+   - **nginx**:  `https://<domain><Q4_CTX>/` (DNS must point to the server; Let’s Encrypt requires 80/443 inbound)
+2. Login with **`guacadmin / guacadmin`** → change password, create your real admin, and **disable `guacadmin`**.
+3. (If created) switch to your **extra admin** user from Q15–Q17.
+4. Configure connections (RDP/SSH/VNC).
 
 ---
 
-## 10) Upgrades / re-running the script
+## Verification & Troubleshooting
 
-- Re-running `guac.sh` performs another **destructive** reinstall:
-  - Backs up config + DB.
-  - Drops DB, recreates, reloads schema.  
-- For **in-place upgrades** preserving DB, request the **non-destructive** variant.
-
----
-
-## 11) Rollback to a **supported** stack (Tomcat 9)
-
-If you need the officially supported path for Guacamole 1.6.0:
+### Quick checks
 
 ```bash
-# stop Tomcat 10
-sudo systemctl stop tomcat
+# Services
+systemctl status guacd
+systemctl status tomcat
 
-# swap Tomcat
-T9=9.0.108
-sudo rm -rf /opt/tomcat
-sudo mkdir -p /opt/tomcat
-cd /tmp && wget -q https://archive.apache.org/dist/tomcat/tomcat-9/v${T9}/bin/apache-tomcat-${T9}.tar.gz
-sudo tar -xzf apache-tomcat-${T9}.tar.gz -C /opt/tomcat --strip-components=1
-sudo chown -R tomcat:tomcat /opt/tomcat
+# Guacamole logs (Tomcat)
+journalctl -u tomcat -n 200 --no-pager | egrep -i "Loaded extension|mysql|jdbc|driver|SEVERE|ERROR"
 
-# restart
-sudo systemctl start tomcat
+# Extensions & JDBC driver
+ls -1 /etc/guacamole/extensions
+ls -1 /etc/guacamole/lib
+
+# DB sanity (should return: guacadmin | 0)
+mariadb -N -e "
+SELECT e.name AS username, u.disabled
+FROM guacamole_entity e JOIN guacamole_user u ON u.entity_id=e.entity_id
+WHERE e.type='USER' AND e.name='guacadmin';" guacamole_db
 ```
 
-No migration needed; Guacamole 1.6.0 targets the **javax** APIs Tomcat 9 uses.
+### Common errors
+
+- **“No suitable driver found for jdbc:mysql://…”**  
+  Ensure `/etc/guacamole/lib/mysql-connector-j-8.4.x.jar` exists and Tomcat has been restarted.
+
+- **Extension not a valid zip / migration issues**  
+  Re-run the script to regenerate **Jakarta-migrated JARs** using the migration tool.
+
+- **Login fails / “unknown error”**  
+  Check Tomcat logs for **MySQL Authentication loaded** and any JDBC stack traces.
+
+- **RDP doesn’t appear**  
+  Confirm `freerdp3-dev` and `freerdp3-x11` installed and `guacd` rebuilt successfully.  
+  `ldconfig` is run by the script; re-run if you added packages later.
+
+- **HTTPS (nginx) fails**  
+  Make sure your domain resolves to the server, ports **80/443** open, then re-run the script (nginx mode).
 
 ---
 
-## 12) File map & important knobs
+## Security notes
 
-- `/etc/guacamole/guacamole.properties`
-  - `mysql-*` DB settings
-  - `json-secret-key` (Encrypted JSON)
-  - `quickconnect-allowed-protocols`
-  - `recording-search-path`
-  - `use-remote-address` (enable when behind Nginx)
-- `/etc/guacamole/extensions/*.jar` — enable/disable features by adding/removing JARs.
-- `/etc/guacamole/lib/*.jar` — JDBC driver.
-- `/var/lib/guacamole/recordings` — server-side recordings store.
-- `/opt/tomcat/webapps/guacamole.war` — migrated WAR.
+- Tomcat runs as **`tomcat`** with `UMask=0027`.
+- QuickConnect can **deny** the `password` parameter if you keep `Q19 = Y`.
+- `guacd` binds to `127.0.0.1` by default. Change to `0.0.0.0` only if you need remote guacd access (and firewall accordingly).
+- Rotate the default `guacadmin` credentials and disable the account.
 
 ---
 
-## 13) Appendix: Example hardening (optional)
+## Uninstall / Rollback
 
-**Remove Tomcat default apps**
-```bash
-sudo rm -rf /opt/tomcat/webapps/{docs,examples,host-manager,manager,ROOT}
-sudo systemctl restart tomcat
-```
-
-**Limit access with UFW (direct mode)**
-```bash
-sudo ufw allow from <trusted-cidr> to any port 8080 proto tcp
-sudo ufw enable
-```
-
-**Systemd hardening already included**: `ProtectSystem=full`, `ProtectHome=true`, `PrivateTmp=true`, `NoNewPrivileges=true` for both `guacd` & `tomcat`.
+- Stop services: `sudo systemctl stop tomcat guacd`  
+- Remove `/opt/tomcat`, `/etc/guacamole`, and guacd binaries if needed.  
+- Restore from `/root/guac-backup-YYYY-MM-DD_HHMMSS` as desired.
 
 ---
 
-### Support / Notes
+## Customization
 
-- This installer intentionally targets the **Jakarta** path on **Tomcat 10** using the official **Jakarta migration** tool to rewrite Guacamole 1.6.0. This is not the upstream-supported combo; validate thoroughly in staging.
-- For maximum stability today, use **Tomcat 9** with Guacamole 1.6.0.
+- Change Tomcat heap via Q13 or edit `JAVA_OPTS` in `/etc/systemd/system/tomcat.service` then `systemctl daemon-reload && systemctl restart tomcat`.
+- Change context path by re-deploying the WAR name, e.g., `/opt/tomcat/webapps/<newname>.war` and updating your reverse proxy.
+
+---
+
+## Compatibility
+
+- **Ubuntu**: 24.04 LTS (Noble)
+- **FreeRDP**: 3.x (`freerdp3-dev`)
+- **Java**: OpenJDK 21
+- **Tomcat**: 10.1.44
+- **Guacamole**: 1.6.0
+
+If your distro mirrors lag behind for `freerdp3-dev`, install system updates (`apt update && apt upgrade -y`) and retry.
