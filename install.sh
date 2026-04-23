@@ -246,6 +246,7 @@ install_guacd() {
   ldconfig
 
   log "Creating guacd systemd unit"
+  # See: https://github.com/betaDtech/guacamole-with-tomcat10/issues/3
   tee /etc/systemd/system/guacd.service >/dev/null <<EOF
 [Unit]
 Description=Guacamole Server
@@ -253,7 +254,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/sbin/guacd -f -l ${Q18B_GUACD_BIND} -p 4822
+ExecStart=/usr/local/sbin/guacd -f -l ${Q18B_GUACD_BIND} -l 4822
 Restart=on-failure
 User=root
 Group=root
@@ -436,7 +437,8 @@ SQL
   [[ -d "$SCHEMA_DIR" ]] || die "Schema dir not found"
   mariadb "${Q5_DB}" < "${SCHEMA_DIR}/001-create-schema.sql"
   mariadb "${Q5_DB}" < "${SCHEMA_DIR}/002-create-admin-user.sql"
-  mariadb "${Q5_DB}" < "${SCHEMA_DIR}/003-create-preferences.sql"
+  # See: https://github.com/betaDtech/guacamole-with-tomcat10/issues/2
+  # mariadb "${Q5_DB}" < "${SCHEMA_DIR}/003-create-preferences.sql"
 
   # Optional: create extra admin (correct hashing like 002 script)
   if [[ "$Q16_EXTRA_ADMIN" =~ ^[yY]$ ]]; then
